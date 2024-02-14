@@ -1,0 +1,219 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-push
+spec:
+  params:
+    - description: The git repo to pull from
+      name: gitrepo
+      type: string
+    - description: The image and tag to build
+      name: imgname
+      type: string
+    - description: The git revision
+      name: gitrev
+      type: string
+    - description: The registry name
+      name: registry
+      type: string
+    - description: The image tag
+      name: imgtag
+      type: string
+    - default: wordpress/website
+      name: kustomize-dir
+      type: string
+    - name: manifest-repo
+      type: string
+  tasks:
+    - name: git-clone-1-13-0
+      params:
+        - name: url
+          value: $(params.gitrepo)
+        - name: revision
+          value: $(params.gitrev)
+        - name: refspec
+          value: ''
+        - name: submodules
+          value: 'true'
+        - name: depth
+          value: '1'
+        - name: sslVerify
+          value: 'true'
+        - name: crtFileName
+          value: ca-bundle.crt
+        - name: subdirectory
+          value: ''
+        - name: sparseCheckoutDirectories
+          value: ''
+        - name: deleteExisting
+          value: 'true'
+        - name: httpProxy
+          value: ''
+        - name: httpsProxy
+          value: ''
+        - name: noProxy
+          value: ''
+        - name: verbose
+          value: 'true'
+        - name: gitInitImage
+          value: 'registry.redhat.io/openshift-pipelines/pipelines-git-init-rhel8@sha256:a652e2fec41694745977d385c845244db3819acca926d85a52c77515f1f2e612'
+        - name: userHome
+          value: /home/git
+      taskRef:
+        kind: ClusterTask
+        name: git-clone-1-13-0
+      workspaces:
+        - name: output
+          workspace: output
+    - name: buildah
+      params:
+        - name: IMAGE
+          value: '$(params.registry)/$(params.imgname):$(tasks.git-clone-1-13-0.results.commit)'
+        - name: BUILDER_IMAGE
+          value: 'registry.redhat.io/rhel8/buildah@sha256:3c2ea396a114221575a4031d90d28c43563f7b96288374e0ba8b22de3ed97b5a'
+        - name: STORAGE_DRIVER
+          value: vfs
+        - name: DOCKERFILE
+          value: ./Containerfile
+        - name: CONTEXT
+          value: .
+        - name: TLSVERIFY
+          value: 'true'
+        - name: FORMAT
+          value: oci
+        - name: BUILD_EXTRA_ARGS
+          value: ''
+        - name: PUSH_EXTRA_ARGS
+          value: ''
+        - name: SKIP_PUSH
+          value: 'false'
+      runAfter:
+        - git-clone-1-13-0
+      taskRef:
+        kind: Task
+        name: buildah
+      workspaces:
+        - name: source
+          workspace: output
+        - name: dockerconfig
+          workspace: dockercred
+    - name: add-tags
+      params:
+        - name: registry
+          value: $(params.registry)
+        - name: source_image
+          value: $(params.imgname)
+        - name: source_digest
+          value: $(tasks.buildah.results.IMAGE_DIGEST)
+        - name: tags
+          value:
+            - $(params.imgtag)
+            - latest
+        - name: tls_verify
+          value: 'true'
+        - name: extra_args
+          value: ''
+      runAfter:
+        - buildah
+      taskRef:
+        kind: Task
+        name: add-tags
+      workspaces:
+        - name: creds
+          workspace: dockercred
+    - name: git-cli
+      params:
+        - name: BASE_IMAGE
+          value: 'cgr.dev/chainguard/git:root-2.39@sha256:7759f87050dd8bacabe61354d75ccd7f864d6b6f8ec42697db7159eccd491139'
+        - name: GIT_USER_NAME
+          value: "Tekton CI user"
+        - name: GIT_USER_EMAIL
+          value: "tekton-ci@ocp-demo.com"
+        - name: GIT_SCRIPT
+          value: 'cd $(workspaces.source.path) && git config --global --add safe.directory $(workspaces.source.path) && ls -la && git status && git commit -am "Edited by Tekton CI" && git remote set-url origin git@github.com:lpanza/ocp4-dr-demo-app-manifests.git && git push origin HEAD:main'
+        - name: USER_HOME
+          value: /root
+        - name: VERBOSE
+          value: 'true'
+      runAfter:
+        - kustomize-update-image
+      taskRef:
+        kind: ClusterTask
+        name: git-cli
+      workspaces:
+        - name: source
+          workspace: output-manifests
+        - name: ssh-directory
+          workspace: gitcred
+    - name: git-clone-manifests
+      params:
+        - name: url
+          value: 'https://github.com/lpanza/ocp4-dr-demo-app-manifests.git'
+        - name: revision
+          value: HEAD
+        - name: refspec
+          value: ''
+        - name: submodules
+          value: 'true'
+        - name: depth
+          value: '1'
+        - name: sslVerify
+          value: 'true'
+        - name: crtFileName
+          value: ca-bundle.crt
+        - name: subdirectory
+          value: ''
+        - name: sparseCheckoutDirectories
+          value: ''
+        - name: deleteExisting
+          value: 'true'
+        - name: httpProxy
+          value: ''
+        - name: httpsProxy
+          value: ''
+        - name: noProxy
+          value: ''
+        - name: verbose
+          value: 'true'
+        - name: gitInitImage
+          value: 'registry.redhat.io/openshift-pipelines/pipelines-git-init-rhel8@sha256:a652e2fec41694745977d385c845244db3819acca926d85a52c77515f1f2e612'
+        - name: userHome
+          value: /home/git
+      taskRef:
+        kind: ClusterTask
+        name: git-clone-1-13-0
+      workspaces:
+        - name: output
+          workspace: output-manifests
+        - name: ssh-directory
+          workspace: gitcred
+    - name: kustomize-update-image
+      params:
+        - name: BASE_IMAGE
+          value: 'cgr.dev/chainguard/git:root-2.39@sha256:7759f87050dd8bacabe61354d75ccd7f864d6b6f8ec42697db7159eccd491139'
+        - name: GIT_USER_NAME
+          value: "Tekton CI user"
+        - name: GIT_USER_EMAIL
+          value: "tekton-ci@ocp-demo.com"
+        - name: GIT_SCRIPT
+          value: 'git config --global --add safe.directory $(workspaces.source.path) && cd $(workspaces.source.path)/$(params.kustomize-dir) && wget https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz && tar zxvf kustomize_v5.3.0_linux_amd64.tar.gz && ./kustomize edit set image "wordpress=$(params.registry)/$(params.imgname):$(tasks.git-clone-1-13-0.results.commit)" && rm -f kustomize kustomize_v5.3.0_linux_amd64.tar.gz'
+        - name: USER_HOME
+          value: /root
+        - name: VERBOSE
+          value: 'true'
+      runAfter:
+        - buildah
+        - git-clone-manifests
+      taskRef:
+        kind: ClusterTask
+        name: git-cli
+      workspaces:
+        - name: source
+          workspace: output-manifests
+        - name: ssh-directory
+          workspace: gitcred
+  workspaces:
+    - name: output
+    - name: gitcred
+    - name: dockercred
+    - name: output-manifests

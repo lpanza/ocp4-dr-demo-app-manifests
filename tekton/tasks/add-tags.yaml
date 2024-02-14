@@ -1,0 +1,54 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: add-tags
+spec:
+  description: >-
+    This Task add additional tags to a docker image
+  workspaces:
+    - name: creds
+      description: Docker registry credentials
+  params:
+    - name: registry
+      description: The output registry
+    - name: source_image
+      description: The image to retag
+    - name: source_digest
+      description: The source digest
+    - name: tags
+      type: array
+      description: additional tags
+    - name: tls_verify
+      description: Validate TLS connection
+      default: "true"
+    - name: extra_args
+      description: additional arguments
+      default: ""
+  steps:
+    - name: re-tag
+      image: registry.redhat.io/ubi9/skopeo@sha256:0c1b2a4e99d715a3023d0a2e934b6d5d4154afc556ccd24314251b9add0654ad
+      # see: https://github.com/tektoncd/pipeline/issues/2374#issuecomment-820588889
+      args:
+        - $(params.tags)
+      script: |-
+        #!/bin/bash
+        set -xe
+
+        CRED_FILE="$(workspaces.creds.path)/.dockerconfigjson"
+        if [[ -f "${CRED_FILE}" ]]; then
+            echo "Using provided credentials"
+            CRED="--dest-authfile ${CRED_FILE} --src-authfile ${CRED_FILE}"
+        fi
+
+        TAGS=($@)
+
+        for tag in "${TAGS[@]}"; do
+          skopeo copy \
+            $CRED \
+            --src-tls-verify=$(params.tls_verify) \
+            --dest-tls-verify=$(params.tls_verify) \
+            $(params.extra_args) \
+            docker://$(params.registry)/$(params.source_image)@$(params.source_digest) \
+            docker://$(params.registry)/$(params.source_image):$tag
+        done

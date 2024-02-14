@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deployment.yaml
+- pvc.yaml
+- service.yaml
+
+secretGenerator:
+- name: database-creds
+  envs:
+  - mariadb.env
+
+images:
+- digest: sha256:b85a8dfefa4c1463cc62a99f6d4f5f030efc5c034fd0309113ed1ee7e431e43d
+  name: mariadb
+  newName: registry.redhat.io/rhel9/mariadb-105
